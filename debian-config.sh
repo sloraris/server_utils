@@ -31,7 +31,7 @@ echo "  System Onboarding - $(hostname)"
 echo "============================================="
 echo ""
 
-read -s -p "Enter Komodo Onboarding Key (leave blank to skip Komodo): " KOMODO_KEY < /dev/tty
+read -p "Enter Komodo Onboarding Key (leave blank to skip Komodo): " KOMODO_KEY < /dev/tty
 echo ""
 if [[ -n "$KOMODO_KEY" ]]; then
     read -p "Enter Komodo Core Address (hit enter for default [$DEFAULT_KOMODO_CORE]): " KOMODO_CORE  < /dev/tty
