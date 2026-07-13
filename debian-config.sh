@@ -31,16 +31,16 @@ echo "  System Onboarding - $(hostname)"
 echo "============================================="
 echo ""
 
-read -s -p "Enter Komodo Onboarding Key (leave blank to skip Komodo): " KOMODO_KEY
+read -s -p "Enter Komodo Onboarding Key (leave blank to skip Komodo): " KOMODO_KEY < /dev/tty
 echo ""
 if [[ -n "$KOMODO_KEY" ]]; then
-    read -p "Enter Komodo Core Address (hit enter for default [$DEFAULT_KOMODO_CORE]): " KOMODO_CORE
+    read -p "Enter Komodo Core Address (hit enter for default [$DEFAULT_KOMODO_CORE]): " KOMODO_CORE  < /dev/tty
     KOMODO_CORE=${KOMODO_CORE:-$DEFAULT_KOMODO_CORE}
 fi
 
 echo ""
-read -r -p "Install Docker? (y/N): " DOCKER_CHOICE
-read -r -p "Perform soft reboot when finished? (y/N): " REBOOT_CHOICE
+read -r -p "Install Docker? (y/N): " DOCKER_CHOICE < /dev/tty
+read -r -p "Perform soft reboot when finished? (y/N): " REBOOT_CHOICE < /dev/tty
 
 echo ""
 echo "============================================="
