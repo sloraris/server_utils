@@ -1,76 +1,138 @@
-#!/usr/bin/env bash
+#!/bin/sh
+set -eu
 
-# Exit immediately if a command exits with a non-zero status
-set -euo pipefail
+force=0
 
-# Ensure the script is run as root
-if [[ $EUID -ne 0 ]]; then
-   echo "Error: This script must be run as root." 
-   exit 1
-fi
+for arg in "$@"; do
+    case "$arg" in
+        -f|--force)
+            force=1
+            ;;
+        -h|--help)
+            echo "Usage: install_mergerfs.sh [--force|-f]"
+            exit 0
+            ;;
+        *)
+            echo "Unknown argument: $arg"
+            echo "Usage: install_mergerfs.sh [--force|-f]"
+            exit 2
+            ;;
+    esac
+done
 
-echo "--- MergerFS Install/Update Script ---"
+cat <<'EOF'
+ ____  __  __ ____
+|  _ \|  \/  / ___|
+| |_) | |\/| \___ \
+|  __/| |  | |___) |
+|_|   |_|  |_|____/
 
-# Ensure prerequisites are installed
-if ! command -v curl &> /dev/null || ! command -v jq &> /dev/null || ! command -v lsb_release &> /dev/null; then
-    echo "[*] Installing required dependencies..."
-    apt-get update -qq && apt-get install -y -qq curl jq lsb-release
-fi
+Perfect Media Server
+EOF
 
-# Detect system architecture and Debian codename
-ARCH=$(dpkg --print-architecture)
-CODENAME=$(lsb_release -cs)
+echo
+echo "This script downloads and installs the latest mergerfs release from GitHub."
+echo
 
-echo "[*] Detected System: Debian $CODENAME ($ARCH)"
-
-# Fetch the latest release data from GitHub API
-REPO="trapexit/mergerfs"
-API_URL="https://api.github.com/repos/$REPO/releases/latest"
-
-echo "[*] Checking latest release from GitHub..."
-LATEST_JSON=$(curl -sL --fail "$API_URL") || { echo "Error: Failed to fetch release data from GitHub."; exit 1; }
-
-# Extract the version tag (stripping any leading 'v' if present, though trapexit typically doesn't use them)
-LATEST_VERSION=$(echo "$LATEST_JSON" | jq -r '.tag_name' | sed 's/^v//')
-
-# Check the currently installed version via dpkg
-if dpkg-query -W -f='${Status}' mergerfs 2>/dev/null | grep -q "ok installed"; then
-    INSTALLED_VERSION=$(dpkg-query -W -f='${Version}\n' mergerfs)
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+    green="$(printf '\033[32m')"
+    red="$(printf '\033[31m')"
+    reset="$(printf '\033[0m')"
 else
-    INSTALLED_VERSION="none"
+    green=""
+    red=""
+    reset=""
 fi
 
-echo " -> Latest available : $LATEST_VERSION"
-echo " -> Currently installed: $INSTALLED_VERSION"
+version_status() {
+    current_version="$1"
+    latest_version="$2"
 
-# Idempotency check: if the latest version is already installed, exit cleanly
-if [[ "$INSTALLED_VERSION" == *"$LATEST_VERSION"* ]]; then
-    echo "[✔] MergerFS is already up to date."
-    exit 0
-fi
+    if [ -z "$current_version" ]; then
+        printf "%snot installed%s" "$red" "$reset"
+    elif dpkg --compare-versions "$current_version" eq "$latest_version"; then
+        printf "%sup to date%s" "$green" "$reset"
+    elif dpkg --compare-versions "$current_version" lt "$latest_version"; then
+        printf "%sbehind%s" "$red" "$reset"
+    else
+        printf "%snewer installed%s" "$green" "$reset"
+    fi
+}
 
-# Extract the appropriate download URL for the target OS and Architecture
-# We are looking for an asset matching: *debian-{CODENAME}*{ARCH}.deb
-DOWNLOAD_URL=$(echo "$LATEST_JSON" | jq -r \
-    --arg os "debian-$CODENAME" \
-    --arg arch "$ARCH" \
-    '.assets[] | select(.name | contains($os) and contains($arch) and endswith(".deb")) | .browser_download_url' | head -n1)
+for command in curl dpkg dpkg-deb apt; do
+    if ! command -v "$command" >/dev/null 2>&1; then
+        echo "Required command not found: $command"
+        exit 1
+    fi
+done
 
-if [[ -z "$DOWNLOAD_URL" || "$DOWNLOAD_URL" == "null" ]]; then
-    echo "Error: Could not find a pre-compiled .deb for Debian $CODENAME ($ARCH) in release $LATEST_VERSION."
-    echo "This might mean the repository hasn't compiled a package for your specific version yet."
+if [ "$(id -u)" -ne 0 ] && ! command -v sudo >/dev/null 2>&1; then
+    echo "This script needs root privileges or sudo."
     exit 1
 fi
 
-# Setup secure temporary file cleanup
-TMP_DEB=$(mktemp /tmp/mergerfs_${LATEST_VERSION}_XXXXXX.deb)
-trap 'rm -f "$TMP_DEB"' EXIT
+sudo_cmd=""
+if [ "$(id -u)" -ne 0 ]; then
+    sudo_cmd="sudo"
+fi
 
-echo "[*] Downloading package from: $DOWNLOAD_URL"
-curl -sL --fail -o "$TMP_DEB" "$DOWNLOAD_URL"
+os_release="$(. /etc/os-release && echo "${VERSION_CODENAME:-}")"
+arch="$(dpkg --print-architecture)"
 
-echo "[*] Installing MergerFS..."
-# Using 'apt-get install ./' instead of 'dpkg -i' automatically pulls down any missing dependencies
-apt-get install -y "$TMP_DEB"
+if [ -z "$os_release" ]; then
+    echo "Could not determine OS release codename."
+    exit 1
+fi
 
-echo "[✔] MergerFS has been successfully updated to $LATEST_VERSION!"
+tmpdir="$(mktemp -d)"
+chmod 755 "$tmpdir"
+trap 'rm -rf "$tmpdir"' EXIT
+
+deb_url="$(curl -fsSL https://api.github.com/repos/trapexit/mergerfs/releases/latest \
+    | grep "browser_download_url.*${os_release}_${arch}.deb\"" \
+    | cut -d '"' -f 4 \
+    | head -n1)"
+
+if [ -z "$deb_url" ]; then
+    echo "No mergerfs .deb found for ${os_release} on ${arch}."
+    exit 1
+fi
+
+deb_file="$tmpdir/$(basename "$deb_url")"
+curl -fsSL "$deb_url" -o "$deb_file"
+
+latest_version="$(dpkg-deb -f "$deb_file" Version)"
+installed_version="$(dpkg-query -W -f='${Version}' mergerfs 2>/dev/null || true)"
+status="$(version_status "$installed_version" "$latest_version")"
+
+echo
+printf "%-14s %-29s %-25s %s\n" "Package" "Currently installed version" "Latest release (GitHub)" "Status"
+printf "%-14s %-29s %-25s %s\n" "-------" "---------------------------" "-----------------------" "------"
+printf "%-14s %-29s %-25s %s\n" "mergerfs" "${installed_version:-not installed}" "$latest_version" "$status"
+echo
+
+if [ "$installed_version" = "$latest_version" ]; then
+    echo "mergerfs is already up to date."
+    exit 0
+fi
+
+if [ "$force" -ne 1 ]; then
+    if [ ! -r /dev/tty ]; then
+        echo "Refusing to run without --force because no interactive terminal is available."
+        exit 1
+    fi
+
+    printf "Install or upgrade mergerfs to %s? [y/N] " "$latest_version" > /dev/tty
+    read -r answer < /dev/tty
+
+    case "$answer" in
+        y|Y|yes|YES)
+            ;;
+        *)
+            echo "Aborted."
+            exit 0
+            ;;
+    esac
+fi
+
+$sudo_cmd apt install -y "$deb_file"
